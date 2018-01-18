@@ -1,0 +1,7 @@
+# Build Output
+src/obj/**
+src/bin/**
+
+# Editors
+.vscode/**
+.geany/**
