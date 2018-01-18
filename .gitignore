@@ -5,3 +5,4 @@ src/bin/**
 # Editors
 .vscode/**
 .geany/**
+**/.vs/**
