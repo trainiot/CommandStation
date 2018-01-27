@@ -1,6 +1,6 @@
 # Build Output
-src/obj/**
-src/bin/**
+src/**/obj/**
+src/**/bin/**
 
 # Editors
 .vscode/**
