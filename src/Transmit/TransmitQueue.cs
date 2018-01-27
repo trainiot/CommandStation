@@ -11,24 +11,24 @@ namespace Trainiot.CommandStation.Transmit
 {
     internal class TransmitQueue
     {
-        private ILogger logger;
+        private readonly ILogger logger;
         private Task currentProcessTask;
         private CancellationTokenSource stopTokenSource; 
-        private PriorityQueue<TransmitQueueEntry> transmitQueue = new PriorityQueue<TransmitQueueEntry>(Comparer<TransmitQueueEntry>.Create((x, y) => x.Priority.CompareTo(y.Priority)));
+        private readonly PriorityQueue<TransmitQueueEntry> transmitQueue = new PriorityQueue<TransmitQueueEntry>(Comparer<TransmitQueueEntry>.Create((x, y) => x.Priority.CompareTo(y.Priority)));
         
         // Only a field to avoid it getting allocated all the time.
-        private List<TransmitQueueEntry> transmitQueueReinsertList = new List<TransmitQueueEntry>();
-        private ConcurrentQueue<TransmitQueueEntry> intakeQueue = new ConcurrentQueue<TransmitQueueEntry>();
+        private readonly List<TransmitQueueEntry> transmitQueueReinsertList = new List<TransmitQueueEntry>();
+        private readonly ConcurrentQueue<TransmitQueueEntry> intakeQueue = new ConcurrentQueue<TransmitQueueEntry>();
 
         // A decoder can reject packages send right after each other. This dictionary tracks the last
         // command send to a specific decoder so we can determine if it is ready for the next command.
         // Identical packages are not delayed.
-        private Dictionary<int, DecoderQuarantineEntry> DecoderQuarantines = new Dictionary<int, DecoderQuarantineEntry>();
+        private readonly Dictionary<int, DecoderQuarantineEntry> DecoderQuarantines = new Dictionary<int, DecoderQuarantineEntry>();
 
         // Used to clear the DecoderQuarantines queue
-        private PriorityQueue<DecoderQuarantineClearEntry> clearDecoderQuarantineQueue = new PriorityQueue<DecoderQuarantineClearEntry>(Comparer<DecoderQuarantineClearEntry>.Create((x, y) => x.QuarantineExpiresTime.CompareTo(y.QuarantineExpiresTime)));  
+        private readonly PriorityQueue<DecoderQuarantineClearEntry> clearDecoderQuarantineQueue = new PriorityQueue<DecoderQuarantineClearEntry>(Comparer<DecoderQuarantineClearEntry>.Create((x, y) => x.QuarantineExpiresTime.CompareTo(y.QuarantineExpiresTime)));  
 
-        public TransmitQueue(ILogger loggerFactory)
+        public TransmitQueue(ILogger logger)
         {
             this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
