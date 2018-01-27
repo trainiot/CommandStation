@@ -8,4 +8,6 @@ RUN dotnet restore
 COPY src/ ./
 RUN dotnet publish -c Release -o out
 
+#TODO: Setup runtime image
+
 ENTRYPOINT ["dotnet", "out/CommandStation.dll"]

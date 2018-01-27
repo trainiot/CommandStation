@@ -102,8 +102,8 @@ namespace CommandStation.Dcc
             }
         }
 
-        public bool IsIdle => PacketBytes[0] == 255;
+        public bool IsIdlePacket => PacketBytes[0] == 255;
 
-        public bool IsBroadcast => PacketBytes[0] == 0;
+        public bool IsBroadcastPacket => PacketBytes[0] == 0;
     }
 }
