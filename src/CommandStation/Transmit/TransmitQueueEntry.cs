@@ -1,5 +1,5 @@
 
-using CommandStation.Dcc;
+using Trainiot.CommandStation.Dcc;
 
 namespace Trainiot.CommandStation.Transmit
 {

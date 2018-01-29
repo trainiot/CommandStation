@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Linq;
 
-namespace CommandStation.Dcc
+namespace Trainiot.CommandStation.Dcc
 {
     /// <summary>
     ///   Represents a DCC command

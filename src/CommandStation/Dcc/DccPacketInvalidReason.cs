@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace CommandStation.Dcc
+namespace Trainiot.CommandStation.Dcc
 {
     public enum DccPacketInvalidReason
     {

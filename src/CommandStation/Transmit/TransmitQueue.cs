@@ -3,13 +3,13 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using CommandStation.Dcc;
+using Trainiot.CommandStation.Dcc;
 using Medallion.Collections;
 using Microsoft.Extensions.Logging;
 
 namespace Trainiot.CommandStation.Transmit
 {
-    internal class TransmitQueue
+    internal class TransmitQueue : IDccPacketSchedular
     {
         private readonly ILogger logger;
         private Task currentProcessTask;
@@ -58,13 +58,14 @@ namespace Trainiot.CommandStation.Transmit
             return result;
         }
 
-        public TransmitQueueEntry Enqueue(DccPacket packet, TimeSpan priority)
+        public void Enqueue(DccPacket packet)
         {
+            TimeSpan priority = TimeSpan.Zero; // TODO: Set priority based on command type.
+
             // Random choice - Positive numbers indicate higher priority
             long priortyLong = (DateTime.UtcNow - priority).Ticks;
             TransmitQueueEntry queueEntry = new TransmitQueueEntry(packet, priortyLong);
             intakeQueue.Enqueue(queueEntry);
-            return queueEntry;
         }
 
         public Task Process()
