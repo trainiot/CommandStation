@@ -28,9 +28,12 @@ namespace Trainiot.CommandStation.Transmit
         // Used to clear the DecoderQuarantines queue
         private readonly PriorityQueue<DecoderQuarantineClearEntry> clearDecoderQuarantineQueue = new PriorityQueue<DecoderQuarantineClearEntry>(Comparer<DecoderQuarantineClearEntry>.Create((x, y) => x.QuarantineExpiresTime.CompareTo(y.QuarantineExpiresTime)));  
 
-        public TransmitQueue(ILogger logger)
+        private readonly Func<DateTime> UtcNow;
+
+        public TransmitQueue(ILogger logger, ITimeSource timeSource)
         {
             this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            UtcNow = timeSource == null ? (Func<DateTime>)(() => DateTime.UtcNow) : () => timeSource.UtcNow;
         }
 
         public void Start()
@@ -63,7 +66,7 @@ namespace Trainiot.CommandStation.Transmit
             TimeSpan priority = TimeSpan.Zero; // TODO: Set priority based on command type.
 
             // Random choice - Positive numbers indicate higher priority
-            long priortyLong = (DateTime.UtcNow - priority).Ticks;
+            long priortyLong = (UtcNow() - priority).Ticks;
             TransmitQueueEntry queueEntry = new TransmitQueueEntry(packet, priortyLong);
             intakeQueue.Enqueue(queueEntry);
         }
@@ -126,7 +129,7 @@ namespace Trainiot.CommandStation.Transmit
             // but most broadcast messages a probably repeated - so for now this is skipped.
 
             if (DecoderQuarantines.TryGetValue(address, out var quarantineEntry) &&
-                quarantineEntry.QuarantineExpiresTime > DateTime.UtcNow &&
+                quarantineEntry.QuarantineExpiresTime > UtcNow() &&
                 !quarantineEntry.DccPacket.Equals(dccPacket))
             {
                 return false;
@@ -139,7 +142,7 @@ namespace Trainiot.CommandStation.Transmit
 
             // There might still be a quarantine due to a broadcast.
             if (DecoderQuarantines.TryGetValue(address, out var broadcastQuarantineEntry) &&
-                broadcastQuarantineEntry.QuarantineExpiresTime > DateTime.UtcNow &&
+                broadcastQuarantineEntry.QuarantineExpiresTime > UtcNow() &&
                 !broadcastQuarantineEntry.DccPacket.Equals(dccPacket))
             {
                 return false;
@@ -161,7 +164,7 @@ namespace Trainiot.CommandStation.Transmit
 
         private void ClearDecoderQuarantines()
         {
-            while (clearDecoderQuarantineQueue.Count > 0 && clearDecoderQuarantineQueue.Peek().QuarantineExpiresTime < DateTime.UtcNow)
+            while (clearDecoderQuarantineQueue.Count > 0 && clearDecoderQuarantineQueue.Peek().QuarantineExpiresTime < UtcNow())
             {
                 var toClear = clearDecoderQuarantineQueue.Dequeue();
                 // Only remove if it has the same timestamp. If not, the dictionary contains a newer packet, and we will wait
