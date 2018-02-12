@@ -41,6 +41,9 @@ namespace Trainiot.CommandStation.Dcc
 
         public static DccPacket ResetPacket { get; } = new DccPacket(new byte[] { 0, 0, 0 });
 
+        // This is not a standard DCC packaget, but an extension. Consider moving it somewhere else.
+        public static DccPacket OffPacket { get; } = new DccPacket(new byte[0]);
+
         public ReadOnlySpan<byte> PacketBytes { get; }
 
         public int Address
@@ -105,5 +108,39 @@ namespace Trainiot.CommandStation.Dcc
         public bool IsIdlePacket => PacketBytes[0] == 255;
 
         public bool IsBroadcastPacket => PacketBytes[0] == 0;
+
+        public static bool operator==(DccPacket p1, DccPacket p2)
+        {
+            return p1.PacketBytes.SequenceEqual(p2.PacketBytes);
+        }
+
+        public static bool operator!=(DccPacket p1, DccPacket p2)
+        {
+            return !p1.PacketBytes.SequenceEqual(p2.PacketBytes);
+        }
+
+        public override bool Equals(object obj)
+        {
+            if (obj is DccPacket)
+            {
+                return false;
+            }
+
+            DccPacket other = (DccPacket)obj;
+            return other == this;
+        }
+
+        public override int GetHashCode()
+        {
+            int length = PacketBytes.Length - 1; // No need to include the checksum
+            long result = 0;
+            for (int index = 0; index < length; index++)
+            {
+                result = (result << 8) | PacketBytes[index];
+            }
+
+            return result.GetHashCode();
+        }
+
     }
 }
