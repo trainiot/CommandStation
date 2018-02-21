@@ -13,12 +13,11 @@ namespace Trainiot.CommandStation.Transmit
     {
         private readonly ILogger logger;
         private Task currentProcessTask;
-        private CancellationTokenSource stopTokenSource; 
+        private CancellationTokenSource stopTokenSource;
         private readonly PriorityQueue<TransmitQueueEntry> transmitQueue = new PriorityQueue<TransmitQueueEntry>(Comparer<TransmitQueueEntry>.Create((x, y) => x.Priority.CompareTo(y.Priority)));
-        
-        // Only a field to avoid it getting allocated all the time.
         private readonly List<TransmitQueueEntry> transmitQueueReinsertList = new List<TransmitQueueEntry>();
         private readonly ConcurrentQueue<TransmitQueueEntry> intakeQueue = new ConcurrentQueue<TransmitQueueEntry>();
+        private readonly ManualResetEventSlim intakeQueueContainsData = new ManualResetEventSlim();
 
         // A decoder can reject packages send right after each other. This dictionary tracks the last
         // command send to a specific decoder so we can determine if it is ready for the next command.
@@ -26,14 +25,17 @@ namespace Trainiot.CommandStation.Transmit
         private readonly Dictionary<int, DecoderQuarantineEntry> DecoderQuarantines = new Dictionary<int, DecoderQuarantineEntry>();
 
         // Used to clear the DecoderQuarantines queue
-        private readonly PriorityQueue<DecoderQuarantineClearEntry> clearDecoderQuarantineQueue = new PriorityQueue<DecoderQuarantineClearEntry>(Comparer<DecoderQuarantineClearEntry>.Create((x, y) => x.QuarantineExpiresTime.CompareTo(y.QuarantineExpiresTime)));  
+        private readonly PriorityQueue<DecoderQuarantineClearEntry> clearDecoderQuarantineQueue = new PriorityQueue<DecoderQuarantineClearEntry>(Comparer<DecoderQuarantineClearEntry>.Create((x, y) => x.QuarantineExpiresTime.CompareTo(y.QuarantineExpiresTime)));
 
-        private readonly Func<DateTime> UtcNow;
+        private readonly Func<DateTime> utcNow;
+
+        private volatile bool isEnabled;
+        private volatile bool isBroadcastingShutdown;
 
         public TransmitQueue(ILogger logger, ITimeSource timeSource)
         {
             this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            UtcNow = timeSource == null ? (Func<DateTime>)(() => DateTime.UtcNow) : () => timeSource.UtcNow;
+            utcNow = timeSource == null ? (Func<DateTime>)(() => DateTime.UtcNow) : () => timeSource.UtcNow;
         }
 
         public void Start()
@@ -66,9 +68,10 @@ namespace Trainiot.CommandStation.Transmit
             TimeSpan priority = TimeSpan.Zero; // TODO: Set priority based on command type.
 
             // Random choice - Positive numbers indicate higher priority
-            long priortyLong = (UtcNow() - priority).Ticks;
+            long priortyLong = (utcNow() - priority).Ticks;
             TransmitQueueEntry queueEntry = new TransmitQueueEntry(packet, priortyLong);
             intakeQueue.Enqueue(queueEntry);
+            intakeQueueContainsData.Set();
         }
 
         public Task Process()
@@ -77,9 +80,15 @@ namespace Trainiot.CommandStation.Transmit
             {
                 try
                 {
+                    intakeQueueContainsData.Reset();
                     MoveCommandsFromIntakeToPriorityQueue();
                     ClearDecoderQuarantines();
                     DccPacket packet = SelectPacketToTransmit();
+                    if (transmitQueue.Count == 0 && intakeQueue.Count == 0)
+                    {
+                        intakeQueueContainsData.Wait()
+
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -92,16 +101,16 @@ namespace Trainiot.CommandStation.Transmit
 
         private DccPacket SelectPacketToTransmit()
         {
-            // Assume transmission right away for now, maybe it make sense to pass the transmit time into this method
-            DccPacket result = DccPacket.IdlePacket;
-            while (transmitQueue.Count > 0 && result.IsIdlePacket)
+            DccPacket defaultPackage = isEnabled ? DccPacket.IdlePacket : DccPacket.OffPacket;
+            DccPacket result = defaultPackage;
+            while (transmitQueue.Count > 0 && result == defaultPackage)
             {
                 var transmitQueueEntry = transmitQueue.Dequeue();
                 if (transmitQueueEntry.IsCanceled)
                 {
                     continue;
                 }
-                
+
                 if (!IsDecoderReadyToReceivePacket(transmitQueueEntry.DccPacket))
                 {
                     transmitQueueReinsertList.Add(transmitQueueEntry);
@@ -110,6 +119,8 @@ namespace Trainiot.CommandStation.Transmit
 
                 result = transmitQueueEntry.DccPacket;
             }
+
+            // Place any commands taken out but not send due to quarantine back in the queue.
 
             transmitQueue.EnqueueRange(transmitQueueReinsertList);
             transmitQueueReinsertList.Clear();
@@ -124,12 +135,12 @@ namespace Trainiot.CommandStation.Transmit
         private bool IsDecoderReadyToReceivePacket(DccPacket dccPacket)
         {
             var address = dccPacket.Address;
-            
+
             // In case it is a broadcast packet, we could choose to check if any decoder is in a timeout period and wait sending the broadcast.
             // but most broadcast messages a probably repeated - so for now this is skipped.
 
             if (DecoderQuarantines.TryGetValue(address, out var quarantineEntry) &&
-                quarantineEntry.QuarantineExpiresTime > UtcNow() &&
+                quarantineEntry.QuarantineExpiresTime > utcNow() &&
                 !quarantineEntry.DccPacket.Equals(dccPacket))
             {
                 return false;
@@ -142,7 +153,7 @@ namespace Trainiot.CommandStation.Transmit
 
             // There might still be a quarantine due to a broadcast.
             if (DecoderQuarantines.TryGetValue(address, out var broadcastQuarantineEntry) &&
-                broadcastQuarantineEntry.QuarantineExpiresTime > UtcNow() &&
+                broadcastQuarantineEntry.QuarantineExpiresTime > utcNow() &&
                 !broadcastQuarantineEntry.DccPacket.Equals(dccPacket))
             {
                 return false;
@@ -155,16 +166,27 @@ namespace Trainiot.CommandStation.Transmit
         {
             while (intakeQueue.TryDequeue(out var queueEntry))
             {
-                if (!queueEntry.IsCanceled)
+                if (queueEntry.IsCanceled)
                 {
-                    transmitQueue.Enqueue(queueEntry);
+                    continue;
                 }
+
+                if (queueEntry.DccPacket == DccPacket.OffPacket || queueEntry.DccPacket == DccPacket.ResetPacket)
+                {
+                    // Cancel any existing package
+                    foreach (var existing in transmitQueue)
+                    {
+                        existing.Cancel();
+                    }
+                }
+
+                transmitQueue.Enqueue(queueEntry);
             }
         }
 
         private void ClearDecoderQuarantines()
         {
-            while (clearDecoderQuarantineQueue.Count > 0 && clearDecoderQuarantineQueue.Peek().QuarantineExpiresTime < UtcNow())
+            while (clearDecoderQuarantineQueue.Count > 0 && clearDecoderQuarantineQueue.Peek().QuarantineExpiresTime < utcNow())
             {
                 var toClear = clearDecoderQuarantineQueue.Dequeue();
                 // Only remove if it has the same timestamp. If not, the dictionary contains a newer packet, and we will wait
