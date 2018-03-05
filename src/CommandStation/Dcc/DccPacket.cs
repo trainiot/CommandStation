@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Linq;
+using System.Text;
 
 namespace Trainiot.CommandStation.Dcc
 {
@@ -142,5 +143,27 @@ namespace Trainiot.CommandStation.Dcc
             return result.GetHashCode();
         }
 
+        public override string ToString()
+        {
+            if (PacketBytes.Length == 0)
+            {
+                return "[OFF]";
+            }
+
+            StringBuilder sb = new StringBuilder(PacketBytes.Length * 3 + 1);
+            sb.Append('[');
+            for (int i = 0; i < PacketBytes.Length; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(' ');
+                }
+
+                sb.Append(PacketBytes[i].ToString("X2"));
+            }
+
+            sb.Append(']');
+            return sb.ToString();
+        }
     }
 }

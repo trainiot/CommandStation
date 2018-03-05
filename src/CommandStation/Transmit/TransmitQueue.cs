@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Trainiot.CommandStation.Dcc;
 using Medallion.Collections;
 using Microsoft.Extensions.Logging;
+using Nito.AsyncEx;
 
 namespace Trainiot.CommandStation.Transmit
 {
@@ -17,7 +18,7 @@ namespace Trainiot.CommandStation.Transmit
         private readonly PriorityQueue<TransmitQueueEntry> transmitQueue = new PriorityQueue<TransmitQueueEntry>(Comparer<TransmitQueueEntry>.Create((x, y) => x.Priority.CompareTo(y.Priority)));
         private readonly List<TransmitQueueEntry> transmitQueueReinsertList = new List<TransmitQueueEntry>();
         private readonly ConcurrentQueue<TransmitQueueEntry> intakeQueue = new ConcurrentQueue<TransmitQueueEntry>();
-        private readonly ManualResetEventSlim intakeQueueContainsData = new ManualResetEventSlim();
+        private readonly AsyncManualResetEvent intakeQueueContainsData = new AsyncManualResetEvent();
 
         // A decoder can reject packages send right after each other. This dictionary tracks the last
         // command send to a specific decoder so we can determine if it is ready for the next command.
@@ -68,8 +69,9 @@ namespace Trainiot.CommandStation.Transmit
             TimeSpan priority = TimeSpan.Zero; // TODO: Set priority based on command type.
 
             // Random choice - Positive numbers indicate higher priority
-            long priortyLong = (utcNow() - priority).Ticks;
-            TransmitQueueEntry queueEntry = new TransmitQueueEntry(packet, priortyLong);
+            long priorityLong = (utcNow() - priority).Ticks;
+            TransmitQueueEntry queueEntry = new TransmitQueueEntry(packet, priorityLong);
+            logger.LogDebug($"Enqueuing packet {packet} with priority {priorityLong}.");
             intakeQueue.Enqueue(queueEntry);
             intakeQueueContainsData.Set();
         }
@@ -78,21 +80,27 @@ namespace Trainiot.CommandStation.Transmit
         {
             while (!stopTokenSource.IsCancellationRequested)
             {
+                DccPacket? packet = null;
                 try
                 {
-                    intakeQueueContainsData.Reset();
-                    MoveCommandsFromIntakeToPriorityQueue();
-                    ClearDecoderQuarantines();
-                    DccPacket packet = SelectPacketToTransmit();
+                    using (logger.BeginScope("Processing DCC command queues."))
+                    {
+                        intakeQueueContainsData.Reset();
+                        MoveCommandsFromIntakeToPriorityQueue();
+                        ClearDecoderQuarantines();
+                        packet = SelectPacketToTransmit();
+                        // TODO: Transmit the packet - then wait for transmission to complete somehow
+                    }
                     if (transmitQueue.Count == 0 && intakeQueue.Count == 0)
                     {
-                        intakeQueueContainsData.Wait()
-
+                        logger.LogDebug("Packet queues empty, waiting for the next command.");
+                        intakeQueueContainsData.WaitAsync(stopTokenSource.Token);
+                        logger.LogDebug("Paket received, continuing processing.");
                     }
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "Error transmitting DCC packet.");
+                    logger.LogWarning(ex, "Error transmitting DCC packet");
                 }
             }
 
@@ -106,18 +114,24 @@ namespace Trainiot.CommandStation.Transmit
             while (transmitQueue.Count > 0 && result == defaultPackage)
             {
                 var transmitQueueEntry = transmitQueue.Dequeue();
-                if (transmitQueueEntry.IsCanceled)
+                using (logger.BeginScope(LoggerScopeKeywords.TransmitQueueEntry(transmitQueueEntry)))
                 {
-                    continue;
-                }
+                    logger.LogDebug($"Considering {{{LoggerScopeKeywords.TransmitQueueEntryKeyword}}} for transmission.", transmitQueueEntry);
+                    if (transmitQueueEntry.IsCanceled)
+                    {
+                        logger.LogDebug($"{{{LoggerScopeKeywords.TransmitQueueEntryKeyword}}} was cancelled.", transmitQueueEntry);
+                        continue;
+                    }
 
-                if (!IsDecoderReadyToReceivePacket(transmitQueueEntry.DccPacket))
-                {
-                    transmitQueueReinsertList.Add(transmitQueueEntry);
-                    continue;
-                }
+                    if (!IsDecoderReadyToReceivePacket(transmitQueueEntry.DccPacket))
+                    {
+                        logger.LogDebug($"{{{LoggerScopeKeywords.TransmitQueueEntryKeyword}}} is for a decoder not ready to receive a new command.", transmitQueueEntry);
+                        transmitQueueReinsertList.Add(transmitQueueEntry);
+                        continue;
+                    }
 
-                result = transmitQueueEntry.DccPacket;
+                    result = transmitQueueEntry.DccPacket;
+                }
             }
 
             // Place any commands taken out but not send due to quarantine back in the queue.
@@ -129,7 +143,9 @@ namespace Trainiot.CommandStation.Transmit
                 transmitQueueReinsertList.Capacity = 64;
             }
 
-            return DccPacket.IdlePacket;
+            logger.LogDebug("{DccPacket} selected for transmission.", result);
+
+            return result;
         }
 
         private bool IsDecoderReadyToReceivePacket(DccPacket dccPacket)
@@ -171,16 +187,23 @@ namespace Trainiot.CommandStation.Transmit
                     continue;
                 }
 
-                if (queueEntry.DccPacket == DccPacket.OffPacket || queueEntry.DccPacket == DccPacket.ResetPacket)
+                using (logger.BeginScope(LoggerScopeKeywords.DccPacket(queueEntry.DccPacket)))
                 {
-                    // Cancel any existing package
-                    foreach (var existing in transmitQueue)
+                    logger.LogDebug($"Dequeued {{{LoggerScopeKeywords.DccPacketKeyword}}} from the intake queue.", queueEntry.DccPacket);
+                    if (queueEntry.DccPacket == DccPacket.OffPacket || queueEntry.DccPacket == DccPacket.ResetPacket)
                     {
-                        existing.Cancel();
+                        // Cancel any existing package
+                        foreach (var existing in transmitQueue)
+                        {
+                            logger.LogDebug($"Cancelling queued packet {{{LoggerScopeKeywords.DccPacketKeyword}}}.", queueEntry.DccPacket);
+                            existing.Cancel();
+                        }
                     }
-                }
 
-                transmitQueue.Enqueue(queueEntry);
+                    logger.LogDebug($"Moving queued packet {{{LoggerScopeKeywords.DccPacketKeyword}}} to command queue.", queueEntry.DccPacket);
+
+                    transmitQueue.Enqueue(queueEntry);
+                }
             }
         }
 

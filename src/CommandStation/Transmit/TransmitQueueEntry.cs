@@ -17,5 +17,7 @@ namespace Trainiot.CommandStation.Transmit
         public long Priority { get;}
         public bool IsCanceled => isCanceled;
         public void Cancel() => isCanceled = true;
+
+        public override string ToString() => DccPacket + (isCanceled ? ":CANCELLED" : "");  
     }
 }
